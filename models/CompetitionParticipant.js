@@ -30,4 +30,9 @@ const competitionParticipantSchema = new mongoose.Schema({
     timestamps: true
 });
 
+competitionParticipantSchema.index(
+    { competition: 1, member: 1 },
+    { unique: true }
+);
+
 export default mongoose.model("CompetitionParticipant", competitionParticipantSchema);

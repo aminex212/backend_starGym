@@ -1,14 +1,18 @@
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import User from "../models/User.js";
-import dotenv from "dotenv";
-dotenv.config();
 import crypto from "crypto";
 import { sendEmail } from "../services/emailService.js";
+import {
+  clearSession,
+  createSession,
+  ensureCsrfToken,
+} from "../middleware/sessionSecurity.js";
+import { cleanEmail, cleanString, escapeHtml } from "../utils/validation.js";
 
 export const login = async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const email = cleanEmail(req.body.email);
+        const password = cleanString(req.body.password, "Password", { max: 128 });
 
         if (!email || !password) {
             return res.status(400).json({
@@ -35,20 +39,11 @@ export const login = async (req, res) => {
             });
         }
 
-        const token = jwt.sign(
-            {
-                id: user._id,
-                role: user.role,
-            },
-            process.env.JWT_SECRET,
-            {
-                expiresIn: "1d",
-            }
-        );
+        const csrfToken = createSession(res, user);
 
         res.status(200).json({
             message: "Login successful",
-            token,
+            csrfToken,
             user: {
                 id: user._id,
                 name: user.name,
@@ -57,17 +52,48 @@ export const login = async (req, res) => {
             },
         });
     } catch (error) {
-        res.status(500).json({
-            message: error.message,
+        res.status(error.statusCode || 500).json({
+            message:
+                error.statusCode === 400
+                    ? error.message
+                    : "Unable to log in",
         });
     }
+};
+
+export const getSession = async (req, res) => {
+  const user = await User.findById(req.user.id).select("name email role");
+
+  if (!user) {
+    clearSession(res);
+    return res.status(401).json({ message: "Session is no longer valid" });
+  }
+
+  return res.status(200).json({
+    csrfToken: ensureCsrfToken(req, res),
+    user: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    },
+  });
+};
+
+export const logout = async (_req, res) => {
+  clearSession(res);
+  return res.status(200).json({ message: "Logged out successfully" });
 };
 
 export const updateProfile = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        const { name, email, password } = req.body;
+        const name = cleanString(req.body.name, "Name", { max: 100 });
+        const email = cleanEmail(req.body.email);
+        const password = req.body.password
+          ? cleanString(req.body.password, "Password", { max: 128 })
+          : "";
 
         if (!name || !email) {
             return res.status(400).json({
@@ -100,6 +126,11 @@ export const updateProfile = async (req, res) => {
 
         // Update password only if a new one was provided
         if (password) {
+            if (password.length < 8) {
+                return res.status(400).json({
+                    message: "Password must be at least 8 characters",
+                });
+            }
             user.password = await bcrypt.hash(password, 12);
         }
 
@@ -115,15 +146,18 @@ export const updateProfile = async (req, res) => {
             },
         });
     } catch (error) {
-        res.status(500).json({
-            message: error.message,
+        res.status(error.statusCode || 500).json({
+            message:
+                error.statusCode === 400
+                    ? error.message
+                    : "Unable to update profile",
         });
     }
 };
 
 export const forgotPassword = async (req, res) => {
   try {
-    const { email } = req.body;
+    const email = cleanEmail(req.body.email);
 
     if (!email) {
       return res.status(400).json({
@@ -174,7 +208,7 @@ export const forgotPassword = async (req, res) => {
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto;">
           <h2>StarGym Fighting Academy</h2>
 
-          <p>Hello ${user.name},</p>
+          <p>Hello ${escapeHtml(user.name)},</p>
 
           <p>
             We received a request to reset your StarGym account password.
@@ -212,15 +246,19 @@ export const forgotPassword = async (req, res) => {
   } catch (error) {
     console.error("Forgot password error:", error);
 
-    return res.status(500).json({
-      message: "Unable to process password reset request",
+    return res.status(error.statusCode || 500).json({
+      message:
+        error.statusCode === 400
+          ? error.message
+          : "Unable to process password reset request",
     });
   }
 };
 
 export const resetPassword = async (req, res) => {
   try {
-    const { token, password } = req.body;
+    const token = cleanString(req.body.token, "Token", { max: 128 });
+    const password = cleanString(req.body.password, "Password", { max: 128 });
 
     if (!token || !password) {
       return res.status(400).json({
@@ -228,9 +266,9 @@ export const resetPassword = async (req, res) => {
       });
     }
 
-    if (password.length < 6) {
+    if (password.length < 8) {
       return res.status(400).json({
-        message: "Password must be at least 6 characters",
+        message: "Password must be at least 8 characters",
       });
     }
 
@@ -265,8 +303,11 @@ export const resetPassword = async (req, res) => {
   } catch (error) {
     console.error("Reset password error:", error);
 
-    return res.status(500).json({
-      message: "Unable to reset password",
+    return res.status(error.statusCode || 500).json({
+      message:
+        error.statusCode === 400
+          ? error.message
+          : "Unable to reset password",
     });
   }
 };

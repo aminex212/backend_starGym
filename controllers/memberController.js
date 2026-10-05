@@ -1,9 +1,32 @@
 import { createNotification } from "../services/notificationService.js";
 import Member from "../models/Member.js";
 import Payment from "../models/Payment.js";
+import MemberPhoto from "../models/MemberPhoto.js";
 import sharp from "sharp";
-import path from "path";
-import fs from "fs";
+import {
+    cleanEnum,
+    cleanNumber,
+    cleanString,
+    cleanStringArray,
+} from "../utils/validation.js";
+
+const disciplinesAllowed = [
+    "MMA",
+    "Kick Boxing",
+    "Boxing",
+    "Wrestling",
+    "Jiu-Jitsu",
+];
+
+async function preparePhoto(file) {
+    if (!file) return null;
+
+    return sharp(file.buffer)
+        .rotate()
+        .resize({ width: 1200, height: 1200, fit: "inside", withoutEnlargement: true })
+        .webp({ quality: 80 })
+        .toBuffer();
+}
 
 export const getMembers = async (req, res) => {
     try {
@@ -21,6 +44,7 @@ export const getMembers = async (req, res) => {
 
         const payments = await Payment.find({
             month: currentMonth,
+            year: currentYear,
             status: "Paid",
         }).select("member");
 
@@ -66,51 +90,50 @@ export const getMemberById = async (req, res) => {
 
 export const createMember = async (req, res) => {
     try {
-        let photoPath = null;
-
-        if (req.file) {
-            const fileName = Date.now() + ".webp";
-
-            const outputPath = path.join(
-                "uploads",
-                "images",
-                fileName
-            );
-
-            await sharp(req.file.buffer)
-                .resize({
-                    width: 1200,
-                    withoutEnlargement: true,
-                })
-                .webp({
-                    quality: 80,
-                })
-                .toFile(outputPath);
-
-            photoPath = outputPath.replaceAll("\\", "/");
-        }
-
         let disciplines = req.body.disciplines;
 
         if (typeof disciplines === "string") {
             disciplines = JSON.parse(disciplines);
         }
 
+        disciplines = cleanStringArray(
+            disciplines,
+            "Disciplines",
+            disciplinesAllowed,
+            { min: 1 }
+        );
+        const insuranceStatus = cleanEnum(
+            req.body.insuranceStatus || "Unpaid",
+            "Insurance status",
+            ["Paid", "Unpaid"]
+        );
+        const photoData = await preparePhoto(req.file);
+
         const member = new Member({
-            name: req.body.name,
-            phone: req.body.phone,
-            age: req.body.age,
-            disciplines: disciplines,
+            name: cleanString(req.body.name, "Name", { max: 100 }),
+            phone: cleanString(req.body.phone, "Phone", { max: 30 }),
+            age: cleanNumber(req.body.age, "Age", { min: 5, max: 100 }),
+            disciplines,
             group: req.body.group || null,
-            photo: photoPath,
-            insuranceStatus: req.body.insuranceStatus,
+            photo: null,
+            insuranceStatus,
             insuranceYear:
-                req.body.insuranceStatus === "Paid"
+                insuranceStatus === "Paid"
                     ? new Date().getFullYear()
                     : null,
         });
 
         await member.save();
+
+        if (photoData) {
+            await MemberPhoto.create({
+                member: member._id,
+                data: photoData,
+                contentType: "image/webp",
+            });
+            member.photo = `/api/member-photos/${member._id}`;
+            await member.save();
+        }
 
         // Create notification + send email
         await createNotification({
@@ -137,46 +160,38 @@ export const updateMember = async (req, res) => {
     try {
         const { id } = req.params;
 
-        let updateData = {
-            name: req.body.name,
-            phone: req.body.phone,
-            age: req.body.age,
-            disciplines: req.body.disciplines,
+        let disciplines = req.body.disciplines;
+
+        if (typeof disciplines === "string") {
+            disciplines = JSON.parse(disciplines);
+        }
+
+        const insuranceStatus = cleanEnum(
+            req.body.insuranceStatus,
+            "Insurance status",
+            ["Paid", "Unpaid"]
+        );
+        const updateData = {
+            name: cleanString(req.body.name, "Name", { max: 100 }),
+            phone: cleanString(req.body.phone, "Phone", { max: 30 }),
+            age: cleanNumber(req.body.age, "Age", { min: 5, max: 100 }),
+            disciplines: cleanStringArray(
+                disciplines,
+                "Disciplines",
+                disciplinesAllowed,
+                { min: 1 }
+            ),
             group: req.body.group || null,
-            status: req.body.status,
-            paymentStatus: req.body.paymentStatus,
-            insuranceStatus: req.body.insuranceStatus,
+            status: cleanEnum(req.body.status, "Status", ["Active", "Out"]),
+            insuranceStatus,
             insuranceYear:
-                req.body.insuranceStatus === "Paid"
+                insuranceStatus === "Paid"
                     ? new Date().getFullYear()
                     : null,
         };
 
-        if (typeof updateData.disciplines === "string") {
-            updateData.disciplines = JSON.parse(updateData.disciplines);
-        }
-
-        if (req.file) {
-            const fileName = Date.now() + ".webp";
-
-            const outputPath = path.join(
-                "uploads",
-                "images",
-                fileName
-            );
-
-            await sharp(req.file.buffer)
-                .resize({
-                    width: 1200,
-                    withoutEnlargement: true,
-                })
-                .webp({
-                    quality: 80,
-                })
-                .toFile(outputPath);
-
-            updateData.photo = outputPath.replaceAll("\\", "/");
-        }
+        const photoData = await preparePhoto(req.file);
+        if (photoData) updateData.photo = `/api/member-photos/${id}`;
 
         const member = await Member.findByIdAndUpdate(
             id,
@@ -193,6 +208,14 @@ export const updateMember = async (req, res) => {
             });
         }
 
+        if (photoData) {
+            await MemberPhoto.findOneAndUpdate(
+                { member: member._id },
+                { data: photoData, contentType: "image/webp" },
+                { upsert: true, runValidators: true }
+            );
+        }
+
         await member.populate(
             "group",
             "name discipline startTime endTime active"
@@ -205,6 +228,7 @@ export const updateMember = async (req, res) => {
         const currentMonthPayment = await Payment.findOne({
             member: member._id,
             month: currentMonth,
+            year: currentYear,
             status: "Paid",
         });
         const memberResponse = {

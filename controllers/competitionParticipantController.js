@@ -2,6 +2,13 @@ import CompetitionParticipant from "../models/CompetitionParticipant.js";
 import Competition from "../models/Competition.js";
 import Member from "../models/Member.js";
 import { createNotification } from "../services/notificationService.js";
+import { cleanEnum, cleanString } from "../utils/validation.js";
+
+function cleanDocuments(value) {
+    if (!Array.isArray(value)) return [];
+    return [...new Set(value.map((item) => cleanString(item, "Document", { max: 100 })))]
+        .slice(0, 20);
+}
 
 
 export const getParticipants = async (req, res) => {
@@ -91,15 +98,39 @@ export const createParticipant = async (req, res) => {
             });
         }
 
+        const existingParticipant = await CompetitionParticipant.findOne({
+            competition,
+            member,
+        });
+
+        if (existingParticipant) {
+            return res.status(409).json({
+                message: "This member is already registered for the competition",
+            });
+        }
+
         const participant = new CompetitionParticipant({
             competition,
             member,
-            competitionPayment,
-            documentsStatus,
-            incompleteDocuments
+            competitionPayment: cleanEnum(
+                competitionPayment || "Unpaid",
+                "Competition payment",
+                ["Paid", "Unpaid"]
+            ),
+            documentsStatus: cleanEnum(
+                documentsStatus || "Incomplete",
+                "Documents status",
+                ["Complete", "Incomplete"]
+            ),
+            incompleteDocuments:
+                documentsStatus === "Complete"
+                    ? []
+                    : cleanDocuments(incompleteDocuments),
         });
 
         await participant.save();
+        await participant.populate("competition", "name date location");
+        await participant.populate("member", "name phone disciplines photo");
 
         // =========================
         // Incomplete Documents
@@ -145,15 +176,61 @@ export const updateParticipant = async (req, res) => {
             });
         }
 
+        const updateData = {
+            competition: req.body.competition,
+            member: req.body.member,
+            competitionPayment: cleanEnum(
+                req.body.competitionPayment,
+                "Competition payment",
+                ["Paid", "Unpaid"]
+            ),
+            documentsStatus: cleanEnum(
+                req.body.documentsStatus,
+                "Documents status",
+                ["Complete", "Incomplete"]
+            ),
+            incompleteDocuments:
+                req.body.documentsStatus === "Complete"
+                    ? []
+                    : cleanDocuments(req.body.incompleteDocuments),
+        };
+
+        const [existingCompetition, existingMember] = await Promise.all([
+            Competition.findById(updateData.competition),
+            Member.findById(updateData.member),
+        ]);
+
+        if (!existingCompetition || !existingMember) {
+            return res.status(404).json({
+                message: !existingCompetition
+                    ? "Competition not found"
+                    : "Member not found",
+            });
+        }
+
+        const duplicate = await CompetitionParticipant.findOne({
+            _id: { $ne: req.params.id },
+            competition: updateData.competition,
+            member: updateData.member,
+        });
+
+        if (duplicate) {
+            return res.status(409).json({
+                message: "This member is already registered for the competition",
+            });
+        }
+
         const participant =
             await CompetitionParticipant.findByIdAndUpdate(
                 req.params.id,
-                req.body,
+                updateData,
                 {
                     returnDocument: "after",
                     runValidators: true
                 }
-            );
+            )
+                .populate("competition", "name date location")
+                .populate("member", "name phone disciplines photo");
 
         if (
             oldParticipant.documentsStatus !== "Incomplete" &&

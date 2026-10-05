@@ -1,27 +1,20 @@
 import jwt from "jsonwebtoken";
-import dotenv from "dotenv";
-
-dotenv.config();
+import { SESSION_COOKIE, verifyCsrfToken } from "./sessionSecurity.js";
 
 const authMiddleware = (req, res, next) => {
     try {
         const authHeader = req.headers.authorization;
+        const bearerToken = authHeader?.startsWith("Bearer ")
+            ? authHeader.slice(7)
+            : null;
+        const cookieToken = req.cookies?.[SESSION_COOKIE];
+        const token = cookieToken || bearerToken;
 
-        if (!authHeader) {
+        if (!token) {
             return res.status(401).json({
                 message: "Access denied. No token provided.",
             });
         }
-
-        const parts = authHeader.split(" ");
-
-        if (parts.length !== 2 || parts[0] !== "Bearer") {
-            return res.status(401).json({
-                message: "Invalid authorization format.",
-            });
-        }
-
-        const token = parts[1];
 
         const decoded = jwt.verify(
             token,
@@ -31,6 +24,16 @@ const authMiddleware = (req, res, next) => {
         if (decoded.role !== "admin") {
             return res.status(403).json({
                 message: "Access denied. Admin only.",
+            });
+        }
+
+        if (
+            cookieToken &&
+            !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
+            !verifyCsrfToken(req)
+        ) {
+            return res.status(403).json({
+                message: "Invalid CSRF token.",
             });
         }
 

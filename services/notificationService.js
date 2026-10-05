@@ -1,6 +1,7 @@
 import Notification from "../models/Notification.js";
 import User from "../models/User.js";
 import { sendEmail } from "./emailService.js";
+import { escapeHtml } from "../utils/validation.js";
 
 export const createNotification = async ({
     type,
@@ -32,8 +33,8 @@ export const createNotification = async ({
                     html: `
                         <div style="font-family: Arial, sans-serif;">
                             <h2>StarGym Fighting Academy</h2>
-                            <h3>${title}</h3>
-                            <p>${message}</p>
+                            <h3>${escapeHtml(title)}</h3>
+                            <p>${escapeHtml(message)}</p>
                         </div>
                     `,
                 });

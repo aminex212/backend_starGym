@@ -1,5 +1,19 @@
 import Competition from "../models/Competition.js";
 import { createNotification } from "../services/notificationService.js";
+import CompetitionParticipant from "../models/CompetitionParticipant.js";
+import { cleanString } from "../utils/validation.js";
+
+function competitionData(body) {
+    return {
+        name: cleanString(body.name, "Name", { max: 150 }),
+        date: body.date,
+        location: cleanString(body.location, "Location", { max: 200 }),
+        description: cleanString(body.description, "Description", {
+            required: false,
+            max: 2000,
+        }) || "",
+    };
+}
 
 export const getCompetitions = async (req, res) => {
     try {
@@ -29,19 +43,7 @@ export const getCompetitionById = async (req, res) => {
 
 export const createCompetition = async (req, res) => {
     try {
-        const {
-            name,
-            date,
-            location,
-            description
-        } = req.body;
-
-        const competition = new Competition({
-            name,
-            date,
-            location,
-            description
-        });
+        const competition = new Competition(competitionData(req.body));
 
         await competition.save();
 
@@ -74,7 +76,7 @@ export const updateCompetition = async (req, res) => {
         const { id } = req.params;
         const competition = await Competition.findByIdAndUpdate(
             id,
-            req.body,
+            competitionData(req.body),
             {
                 returnDocument: "after",
                 runValidators: true
@@ -102,6 +104,8 @@ export const deleteCompetition = async (req, res) => {
         if (!competition) {
             return res.status(404).json({ message: "Competition not found" });
         }
+
+        await CompetitionParticipant.deleteMany({ competition: id });
 
         res.status(200).json({ message: "Competition deleted successfully" });
     } catch (error) {

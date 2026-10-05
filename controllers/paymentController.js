@@ -1,27 +1,25 @@
 import Payment from "../models/Payment.js";
 import Member from "../models/Member.js";
 import { createNotification } from "../services/notificationService.js";
+import {
+    cleanEnum,
+    cleanNumber,
+} from "../utils/validation.js";
+
+const months = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+];
 
 
 export const getPayments = async (req, res) => {
     try {
-        const currentMonth = new Date().toLocaleString("en-US", {
-            month: "long",
-        });
-
         const payments = await Payment.find()
             .populate("member", "name phone disciplines")
+            .sort({ year: -1, paymentDate: -1 })
             .lean();
 
-        const paymentsWithCurrentStatus = payments.map((payment) => ({
-            ...payment,
-            status:
-                payment.status === "Paid" && payment.month === currentMonth
-                    ? "Paid"
-                    : "Unpaid",
-        }));
-
-        res.status(200).json(paymentsWithCurrentStatus);
+        res.status(200).json(payments);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -49,8 +47,18 @@ export const createPayment = async (req, res) => {
             amount,
             paymentDate,
             month,
-            status
+            status,
+            year,
         } = req.body;
+
+        const cleanMonth = cleanEnum(month, "Month", months);
+        const cleanYear = cleanNumber(
+            year || new Date(paymentDate || Date.now()).getFullYear(),
+            "Year",
+            { min: 2000, max: 2100 }
+        );
+        const cleanStatus = cleanEnum(status, "Status", ["Paid", "Unpaid"]);
+        const cleanAmount = cleanNumber(amount, "Amount", { min: 0, max: 1000000 });
 
         const existingMember = await Member.findById(member);
 
@@ -62,7 +70,8 @@ export const createPayment = async (req, res) => {
 
         const existingPayment = await Payment.findOne({
             member,
-            month
+            month: cleanMonth,
+            year: cleanYear,
         });
 
         if (existingPayment) {
@@ -73,10 +82,11 @@ export const createPayment = async (req, res) => {
 
         const payment = new Payment({
             member,
-            amount,
+            amount: cleanAmount,
             paymentDate,
-            month,
-            status
+            month: cleanMonth,
+            year: cleanYear,
+            status: cleanStatus,
         });
 
         await payment.save();
@@ -85,19 +95,19 @@ export const createPayment = async (req, res) => {
         // Create Notification
         // =========================
 
-        if (status === "Paid") {
+        if (cleanStatus === "Paid") {
             await createNotification({
                 type: "payment_created",
                 title: "Payment Received",
-                message: `${existingMember.name} has paid ${amount} for ${month}.`,
+                message: `${existingMember.name} has paid ${cleanAmount} for ${cleanMonth} ${cleanYear}.`,
             });
         }
 
-        if (status === "Unpaid") {
+        if (cleanStatus === "Unpaid") {
             await createNotification({
                 type: "payment_unpaid",
                 title: "Payment Unpaid",
-                message: `${existingMember.name} has an unpaid payment for ${month}.`,
+                message: `${existingMember.name} has an unpaid payment for ${cleanMonth} ${cleanYear}.`,
             });
         }
 
@@ -133,14 +143,35 @@ export const updatePayment = async (req, res) => {
         }
 
         // Update payment
+        const updateData = {
+            amount: cleanNumber(req.body.amount, "Amount", { min: 0, max: 1000000 }),
+            month: cleanEnum(req.body.month, "Month", months),
+            year: cleanNumber(req.body.year, "Year", { min: 2000, max: 2100 }),
+            paymentDate: req.body.paymentDate,
+            status: cleanEnum(req.body.status, "Status", ["Paid", "Unpaid"]),
+        };
+
+        const duplicate = await Payment.findOne({
+            _id: { $ne: id },
+            member: oldPayment.member._id,
+            month: updateData.month,
+            year: updateData.year,
+        });
+
+        if (duplicate) {
+            return res.status(409).json({
+                message: "Payment for this month and year already exists",
+            });
+        }
+
         const payment = await Payment.findByIdAndUpdate(
             id,
-            req.body,
+            updateData,
             {
                 returnDocument: "after",
                 runValidators: true
             }
-        );
+        ).populate("member", "name phone disciplines");
 
         // =========================
         // Payment became Paid
@@ -153,7 +184,7 @@ export const updatePayment = async (req, res) => {
             await createNotification({
                 type: "payment_created",
                 title: "Payment Received",
-                message: `${oldPayment.member.name} has paid ${payment.amount} for ${payment.month}.`,
+                message: `${oldPayment.member.name} has paid ${payment.amount} for ${payment.month} ${payment.year}.`,
             });
         }
 
@@ -168,7 +199,7 @@ export const updatePayment = async (req, res) => {
             await createNotification({
                 type: "payment_unpaid",
                 title: "Payment Unpaid",
-                message: `${oldPayment.member.name} has an unpaid payment for ${payment.month}.`,
+                message: `${oldPayment.member.name} has an unpaid payment for ${payment.month} ${payment.year}.`,
             });
         }
 

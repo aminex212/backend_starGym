@@ -8,7 +8,9 @@ export const sendEmail = async ({
     html,
 }) => {
     const { data, error } = await resend.emails.send({
-        from: "StarGym <onboarding@resend.dev>",
+        from:
+            process.env.RESEND_FROM ||
+            "StarGym <onboarding@resend.dev>",
         to: [to],
         subject,
         html,

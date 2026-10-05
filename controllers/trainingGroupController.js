@@ -1,5 +1,27 @@
 import TrainingGroup from "../models/TrainingGroup.js";
 import Member from "../models/Member.js";
+import {
+    cleanEnum,
+    cleanString,
+    cleanStringArray,
+} from "../utils/validation.js";
+
+const disciplines = ["MMA", "Kick Boxing", "Boxing", "Jiu-Jitsu", "Wrestling"];
+const weekDays = [
+    "Monday", "Tuesday", "Wednesday", "Thursday",
+    "Friday", "Saturday", "Sunday",
+];
+
+function trainingGroupData(body) {
+    return {
+        name: cleanString(body.name, "Name", { max: 100 }),
+        discipline: cleanEnum(body.discipline, "Discipline", disciplines),
+        days: cleanStringArray(body.days, "Days", weekDays, { min: 1 }),
+        startTime: cleanString(body.startTime, "Start time", { max: 5 }),
+        endTime: cleanString(body.endTime, "End time", { max: 5 }),
+        active: body.active !== false,
+    };
+}
 
 
 export const getTrainingGroups = async (req, res) => {
@@ -40,23 +62,7 @@ export const getTrainingGroupById = async (req, res) => {
 
 export const createTrainingGroup = async (req, res) => {
     try {
-        const {
-            name,
-            discipline,
-            days,
-            startTime,
-            endTime,
-            active,
-        } = req.body;
-
-        const group = new TrainingGroup({
-            name,
-            discipline,
-            days,
-            startTime,
-            endTime,
-            active,
-        });
+        const group = new TrainingGroup(trainingGroupData(req.body));
 
         await group.save();
 
@@ -78,7 +84,7 @@ export const updateTrainingGroup = async (req, res) => {
 
         const group = await TrainingGroup.findByIdAndUpdate(
             id,
-            req.body,
+            trainingGroupData(req.body),
             {
                 returnDocument: "after",
                 runValidators: true,
